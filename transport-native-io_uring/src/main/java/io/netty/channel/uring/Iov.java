@@ -37,4 +37,22 @@ final class Iov {
             PlatformDependent.putLong(iovAddress + Native.IOVEC_OFFSETOF_IOV_LEN, length);
         }
     }
+
+    static long readBufferAddress(long iovAddress) {
+        if (Native.SIZEOF_SIZE_T == 4) {
+            return PlatformDependent.getInt(iovAddress + Native.IOVEC_OFFSETOF_IOV_BASE);
+        } else {
+            assert Native.SIZEOF_SIZE_T == 8;
+            return PlatformDependent.getLong(iovAddress + Native.IOVEC_OFFSETOF_IOV_BASE);
+        }
+    }
+
+    static int readBufferLength(long iovAddress) {
+        if (Native.SIZEOF_SIZE_T == 4) {
+            return PlatformDependent.getInt(iovAddress + Native.IOVEC_OFFSETOF_IOV_LEN);
+        } else {
+            assert Native.SIZEOF_SIZE_T == 8;
+            return (int) PlatformDependent.getLong(iovAddress + Native.IOVEC_OFFSETOF_IOV_LEN);
+        }
+    }
 }

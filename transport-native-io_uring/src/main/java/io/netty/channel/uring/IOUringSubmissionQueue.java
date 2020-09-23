@@ -156,12 +156,12 @@ final class IOUringSubmissionQueue {
         return enqueueSqe(Native.IORING_OP_POLL_ADD, pollMask, fd, 0, 0, 0, pollMask);
     }
 
-    boolean addRecvmsg(int fd, long msgHdr) {
-        return enqueueSqe(Native.IORING_OP_RECVMSG, 0, fd, msgHdr, 1, 0, 0);
+    boolean addRecvmsg(int fd, long msgHdr, int data) {
+        return enqueueSqe(Native.IORING_OP_RECVMSG, 0, fd, msgHdr, 1, 0, data);
     }
 
-    boolean addSendmsg(int fd, long msgHdr) {
-        return enqueueSqe(Native.IORING_OP_SENDMSG, 0, fd, msgHdr, 1, 0, 0);
+    boolean addSendmsg(int fd, long msgHdr, int data) {
+        return enqueueSqe(Native.IORING_OP_SENDMSG, 0, fd, msgHdr, 1, 0, data);
     }
 
     boolean addRead(int fd, long bufferAddress, int pos, int limit) {
