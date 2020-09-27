@@ -476,9 +476,12 @@ abstract class AbstractIOUringChannel extends AbstractChannel implements UnixCha
         }
 
         final void readComplete(int res, int data) {
-            int outstanding = clearReadScheduledIfNeeded();
+            assert numOutstandingReads > 0;
+            if (--numOutstandingReads == 0) {
+                ioState &= ~READ_SCHEDULED;
+            }
 
-            readComplete0(res, data, outstanding);
+            readComplete0(res, data, numOutstandingReads);
         }
 
         /**
@@ -621,14 +624,6 @@ abstract class AbstractIOUringChannel extends AbstractChannel implements UnixCha
          * Called once a write was completed.
          */
         abstract boolean writeComplete0(int res, int data, int outstanding);
-
-        private int clearReadScheduledIfNeeded() {
-            assert numOutstandingReads > 0;
-            if (--numOutstandingReads == 0) {
-                ioState &= ~READ_SCHEDULED;
-            }
-            return numOutstandingReads;
-        }
 
         /**
          * Connect was completed.

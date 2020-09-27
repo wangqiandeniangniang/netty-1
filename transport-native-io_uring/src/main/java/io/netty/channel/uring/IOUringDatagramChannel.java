@@ -371,15 +371,13 @@ public final class IOUringDatagramChannel extends AbstractIOUringChannel impleme
             final ChannelPipeline pipeline = pipeline();
             ByteBuf byteBuf = this.readBuffer;
             assert byteBuf != null;
-            // We need to use idx - 1 here to match up the logic in scheduleRead0()
-            int idx = data - 1;
             try {
-                if (idx == -1) {
+                if (data == -1) {
                     assert outstanding == 0;
-                    // idx == -1 means that we did a read(...) and not a recvmmsg(...)
+                    // data == -1 means that we did a read(...) and not a recvmmsg(...)
                     readComplete(pipeline, allocHandle, byteBuf, res);
                 } else {
-                    recvmsgComplete(pipeline, allocHandle, byteBuf, res, idx, outstanding);
+                    recvmsgComplete(pipeline, allocHandle, byteBuf, res, data, outstanding);
                 }
             } catch (Throwable t) {
                 if (connected && t instanceof NativeIoException) {
@@ -447,10 +445,10 @@ public final class IOUringDatagramChannel extends AbstractIOUringChannel impleme
                     allocHandle.incMessagesRead(1);
                     DatagramPacket packet = hdr.read(IOUringDatagramChannel.this, byteBuf, res);
                     pipeline.fireChannelRead(packet);
+                    byteBuf = null;
                 } else {
                     allocHandle.lastBytesRead(0);
                 }
-                byteBuf = null;
 
                 if (outstanding == 0) {
                     // There are no outstanding completion events, release the readBuffer and see if we need to schedule
@@ -488,10 +486,10 @@ public final class IOUringDatagramChannel extends AbstractIOUringChannel impleme
 
             if (isConnected() && numDatagram <= 1) {
                 submissionQueue().addRead(socket.intValue(), byteBuf.memoryAddress(),
-                        byteBuf.writerIndex(), byteBuf.capacity());
+                        byteBuf.writerIndex(), byteBuf.capacity(), -1);
                 return 1;
             } else {
-                int scheduled = scheduleRcvmsg(byteBuf, numDatagram, datagramSize);
+                int scheduled = scheduleRecvmsg(byteBuf, numDatagram, datagramSize);
                 if (scheduled == 0) {
                     // We could not schedule any recvmmsg so we need to release the buffer as there will be no
                     // completion event.
@@ -502,34 +500,19 @@ public final class IOUringDatagramChannel extends AbstractIOUringChannel impleme
             }
         }
 
-        private int scheduleRcvmsg(ByteBuf byteBuf, int numDatagram, int datagramSize) {
+        private int scheduleRecvmsg(ByteBuf byteBuf, int numDatagram, int datagramSize) {
             int writable = byteBuf.writableBytes();
             IOUringSubmissionQueue submissionQueue = submissionQueue();
             long bufferAddress = byteBuf.memoryAddress() + byteBuf.writerIndex();
             if (numDatagram <= 1) {
-                MsgHdrMemory msgHdrMemory = recvmsgHdrs.nextHdr();
-                if (msgHdrMemory == null) {
-                    // We can not continue reading before we did not submit the recvmsg(s) and received the results.
-                    return 0;
-                }
-                msgHdrMemory.write(socket, null, bufferAddress, writable);
-                // We always use idx + 1 here so we can detect if no idx was used by checking if data == 0 in
-                // readComplete0(...)
-                submissionQueue.addRecvmsg(socket.intValue(), msgHdrMemory.address(), msgHdrMemory.idx() + 1);
-                return 1;
+                return scheduleRecvmsg0(submissionQueue, bufferAddress, writable) ? 1 : 0;
             } else {
                 int i = 0;
                 // Add multiple IORING_OP_RECVMSG to the submission queue. This basically emulates recvmmsg(...)
                 for (; i < numDatagram && writable >= datagramSize; i++) {
-                    MsgHdrMemory msgHdrMemory = recvmsgHdrs.nextHdr();
-                    if (msgHdrMemory == null) {
-                        // We can not continue reading before we did not submit the recvmsg(s) and received the results.
+                    if (!scheduleRecvmsg0(submissionQueue, bufferAddress, datagramSize)) {
                         break;
                     }
-                    msgHdrMemory.write(socket, null, bufferAddress, datagramSize);
-                    // We always use idx + 1 here so we can detect if no idx was used by checking if data == 0 in
-                    // readComplete0(...)
-                    submissionQueue.addRecvmsg(socket.intValue(), msgHdrMemory.address(), msgHdrMemory.idx() + 1);
                     bufferAddress += datagramSize;
                     writable -= datagramSize;
                 }
@@ -537,18 +520,29 @@ public final class IOUringDatagramChannel extends AbstractIOUringChannel impleme
             }
         }
 
+        private boolean scheduleRecvmsg0(IOUringSubmissionQueue submissionQueue, long bufferAddress, int bufferLength) {
+            MsgHdrMemory msgHdrMemory = recvmsgHdrs.nextHdr();
+            if (msgHdrMemory == null) {
+                // We can not continue reading before we did not submit the recvmsg(s) and received the results.
+                return false;
+            }
+            msgHdrMemory.write(socket, null, bufferAddress, bufferLength);
+            // We always use idx here so we can detect if no idx was used by checking if data < 0 in
+            // readComplete0(...)
+            submissionQueue.addRecvmsg(socket.intValue(), msgHdrMemory.address(), msgHdrMemory.idx());
+            return true;
+        }
+
         @Override
         boolean writeComplete0(int res, int data, int outstanding) {
             ChannelOutboundBuffer outboundBuffer = outboundBuffer();
-            // We need to use idx -1 here to match up the logic in scheduleRead0()
-            int idx = data - 1;
-            if (idx == -1) {
+            if (data == -1) {
                 assert outstanding == 0;
                 // idx == -1 means that we did a write(...) and not a sendmsg(...) operation
                 return removeFromOutboundBuffer(outboundBuffer, res, "io_uring write");
             } else {
                 // Store the result so we can handle it as soon as we have no outstanding writes anymore.
-                sendmsgResArray[idx] = res;
+                sendmsgResArray[data] = res;
                 if (outstanding == 0) {
                     // All writes are done as part of a batch. Let's remove these from the ChannelOutboundBuffer
                     boolean writtenSomething = false;
@@ -565,18 +559,16 @@ public final class IOUringDatagramChannel extends AbstractIOUringChannel impleme
         }
 
         private boolean removeFromOutboundBuffer(ChannelOutboundBuffer outboundBuffer, int res, String errormsg) {
-            final boolean removed;
             if (res >= 0) {
                 // When using Datagram we should consider the message written as long as res is not negative.
-                removed = outboundBuffer.remove();
+                return outboundBuffer.remove();
             } else {
                 try {
                     return ioResult(errormsg, res) != 0;
                 } catch (Throwable cause) {
-                    removed = outboundBuffer.remove(cause);
+                    return outboundBuffer.remove(cause);
                 }
             }
-            return removed;
         }
 
         @Override
@@ -594,10 +586,7 @@ public final class IOUringDatagramChannel extends AbstractIOUringChannel impleme
 
         @Override
         protected int scheduleWriteSingle(Object msg) {
-            if (scheduleWrite(msg, false)) {
-                return 1;
-            }
-            return 0;
+            return scheduleWrite(msg, false) ? 1 : 0;
         }
 
         private boolean scheduleWrite(Object msg, boolean forceSendmsg) {
@@ -620,14 +609,12 @@ public final class IOUringDatagramChannel extends AbstractIOUringChannel impleme
                 if (forceSendmsg) {
                     return scheduleSendmsg(
                             IOUringDatagramChannel.this.remoteAddress(), bufferAddress, data.readableBytes());
-                } else {
-                    submissionQueue.addWrite(socket.intValue(), bufferAddress, data.readerIndex(),
-                            data.writerIndex());
-                    return true;
                 }
-            } else {
-                return scheduleSendmsg(remoteAddress, bufferAddress, data.readableBytes());
+                submissionQueue.addWrite(socket.intValue(), bufferAddress, data.readerIndex(),
+                        data.writerIndex(), -1);
+                return true;
             }
+            return scheduleSendmsg(remoteAddress, bufferAddress, data.readableBytes());
         }
 
         private boolean scheduleSendmsg(InetSocketAddress remoteAddress, long bufferAddress, int bufferLength) {
@@ -638,7 +625,7 @@ public final class IOUringDatagramChannel extends AbstractIOUringChannel impleme
                 return false;
             }
             hdr.write(socket, remoteAddress, bufferAddress, bufferLength);
-            submissionQueue().addSendmsg(socket.intValue(), hdr.address(), hdr.idx() + 1);
+            submissionQueue().addSendmsg(socket.intValue(), hdr.address(), hdr.idx());
             return true;
         }
     }

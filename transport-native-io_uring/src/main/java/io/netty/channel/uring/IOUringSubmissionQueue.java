@@ -164,17 +164,17 @@ final class IOUringSubmissionQueue {
         return enqueueSqe(Native.IORING_OP_SENDMSG, 0, fd, msgHdr, 1, 0, data);
     }
 
-    boolean addRead(int fd, long bufferAddress, int pos, int limit) {
-        return enqueueSqe(Native.IORING_OP_READ, 0, fd, bufferAddress + pos, limit - pos, 0, 0);
+    boolean addRead(int fd, long bufferAddress, int pos, int limit, int data) {
+        return enqueueSqe(Native.IORING_OP_READ, 0, fd, bufferAddress + pos, limit - pos, 0, data);
     }
 
-    boolean addWrite(int fd, long bufferAddress, int pos, int limit) {
-        return enqueueSqe(Native.IORING_OP_WRITE, 0, fd, bufferAddress + pos, limit - pos, 0, 0);
+    boolean addWrite(int fd, long bufferAddress, int pos, int limit, int data) {
+        return enqueueSqe(Native.IORING_OP_WRITE, 0, fd, bufferAddress + pos, limit - pos, 0, data);
     }
 
-    boolean addAccept(int fd, long address, long addressLength) {
+    boolean addAccept(int fd, long address, long addressLength, int data) {
         return enqueueSqe(Native.IORING_OP_ACCEPT, Native.SOCK_NONBLOCK | Native.SOCK_CLOEXEC, fd,
-                address, 0, addressLength, 0);
+                address, 0, addressLength, data);
     }
 
     //fill the address which is associated with server poll link user_data
@@ -187,8 +187,8 @@ final class IOUringSubmissionQueue {
         return enqueueSqe(Native.IORING_OP_CONNECT, 0, fd, socketAddress, 0, socketAddressLength, 0);
     }
 
-    boolean addWritev(int fd, long iovecArrayAddress, int length) {
-        return enqueueSqe(Native.IORING_OP_WRITEV, 0, fd, iovecArrayAddress, length, 0, 0);
+    boolean addWritev(int fd, long iovecArrayAddress, int length, int data) {
+        return enqueueSqe(Native.IORING_OP_WRITEV, 0, fd, iovecArrayAddress, length, 0, data);
     }
 
     boolean addClose(int fd) {
@@ -245,8 +245,8 @@ final class IOUringSubmissionQueue {
     private static long convertToUserData(int fd, int op, int data) {
         assert op <= Short.MAX_VALUE;
         assert data <= Short.MAX_VALUE;
-        int opMask = op << 16 | (data & 0xFFFF);
-        return (long) fd << 32 | opMask & 0xFFFFFFFFL;
+        int opMask = (op << 16) | (((short) data) & 0xFFFF);
+        return (((long) fd) << 32) | (opMask & 0xFFFFFFFFL);
     }
 
     public long count() {

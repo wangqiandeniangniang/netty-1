@@ -55,7 +55,7 @@ public class NativeTest {
         assertNotNull(completionQueue);
 
         assertFalse(submissionQueue.addWrite(fd, writeEventByteBuf.memoryAddress(),
-                                            writeEventByteBuf.readerIndex(), writeEventByteBuf.writerIndex()));
+                                            writeEventByteBuf.readerIndex(), writeEventByteBuf.writerIndex(), 0));
         submissionQueue.submit();
 
         assertTrue(completionQueue.ioUringWaitCqe());
@@ -69,7 +69,7 @@ public class NativeTest {
 
         final ByteBuf readEventByteBuf = allocator.directBuffer(100);
         assertFalse(submissionQueue.addRead(fd, readEventByteBuf.memoryAddress(),
-                                           readEventByteBuf.writerIndex(), readEventByteBuf.capacity()));
+                                           readEventByteBuf.writerIndex(), readEventByteBuf.capacity(), 0));
         submissionQueue.submit();
 
         assertTrue(completionQueue.ioUringWaitCqe());
